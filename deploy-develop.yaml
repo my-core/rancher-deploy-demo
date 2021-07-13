@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rancher-deploy-demo-${CICD_GIT_BRANCH} # sevice名，添加了git分支用户区分不同的环境
+  namespace: app-service # 命名空间，创建的业务命名空间
+  labels: # 标签
+    app: rancher-deploy-demo-${CICD_GIT_BRANCH}
+    version: v1
+    HealthChecks: enabled
+spec:
+  selector: # 选择器，与下边的Deployment的标签一致，用于筛选Deployment
+    app: rancher-deploy-demo-${CICD_GIT_BRANCH}
+  type: ClusterIP # service类型，有4种，有兴趣的去了解一下
+  ports: # 端口，与Dockerfile里暴露的端口一致
+    - port: 80
+      name: http
+---
+# ServiceAccount，可选项，用Istio的时候，有ServiceAccount可以实现链路追踪
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rancher-deploy-demo-${CICD_GIT_BRANCH}
+  namespace: app-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rancher-deploy-demo-${CICD_GIT_BRANCH} # Deployment名，添加了git分支用户区分不同的环境
+  namespace: app-service
+  labels: # 标签，与Service里的选择器一致
+    app: rancher-deploy-demo-${CICD_GIT_BRANCH}
+    version: v1
+spec:
+  replicas: 2 # pod部署数量
+  selector:
+    matchLabels:
+      app: rancher-deploy-demo-${CICD_GIT_BRANCH}
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: rancher-deploy-demo-${CICD_GIT_BRANCH}
+        version: v1
+    spec:
+      serviceAccountName: rancher-deploy-demo-${CICD_GIT_BRANCH} # ServiceAccount和前边建的ServiceAccount一致，可选
+      containers:
+      - name: rancher-deploy-demo-${CICD_GIT_BRANCH}
+        image: ${CICD_IMAGE}:${CICD_GIT_BRANCH}-${CICD_GIT_COMMIT} # 镜像地址，在公司私有harbor上，使用git分支+commit hash做tag, 防止拉错镜像
+        env: # 环境变量，这里加载的是k8s里设置的dotnet-env ConfigMap         
+          - name: ASPNETCORE_ENVIRONMENT
+            valueFrom:
+              configMapKeyRef:
+                name: dotnet-env
+                key: ASPNETCORE_ENVIRONMENT
+        ports: # 端口，与Dockerfile里暴露的端口一致
+        - containerPort: 80
+        lifecycle:
+          postStart: # 映射日志目录
+            exec:
+              command:
+                - /bin/sh
+                - '-c'
+                - >-
+                  mkdir -p /home/mount/${HOSTNAME} /home/admin
+                  && ln -s /home/mount/${HOSTNAME} /home/admin/logs
+                  && echo ${HOSTNAME}
+        livenessProbe:
+          httpGet:
+            path: /health/self
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 5              
+      imagePullSecrets: # harbor 密钥凭证，取k8s里的harbor-niuguwang Secret
+        - name: nexus-repository
